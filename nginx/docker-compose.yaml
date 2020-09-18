@@ -33,6 +33,4 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
 networks:
-  internal: {}
   proxy: { name: proxy }
-  proxy: { external: true }
