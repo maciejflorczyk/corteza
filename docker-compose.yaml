@@ -12,39 +12,74 @@ services:
       MYSQL_PASSWORD:      change-me
       MYSQL_ROOT_PASSWORD: change-me-too
     healthcheck: { test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"], timeout: 20s, retries: 10 }
+    networks: [ internal ]
+    # Uncomment to use local fs for data persistence
+    # volumes: [ "./data/db:/var/lib/mysql" ]
 
   server:
     image: cortezaproject/corteza-server-monolith:${VERSION}
     restart: on-failure
     env_file: [ .env ]
-    environment:
-      # Informing Corredor where it he contact us
-      CORREDOR_API_BASE_URL_SYSTEM:    "http://server:80/system"
-      CORREDOR_API_BASE_URL_MESSAGING: "http://server:80/messaging"
-      CORREDOR_API_BASE_URL_COMPOSE:   "http://server:80/compose"
-      CORREDOR_ADDR:                   "corredor:${LOCAL_DEMO_CRD_PORT}"
     depends_on: [ db, corredor ]
-    # Binds internal port 80 to port LOCAL_DEMO_API_PORT on localhost
-    ports: [ "${SERVER_IP}:${LOCAL_DEMO_API_PORT}:80" ]
+    networks: [ proxy, internal ]
+    environment:
+      VIRTUAL_HOST:     api.${DOMAIN}
+      LETSENCRYPT_HOST: api.${DOMAIN}
+      CORREDOR_API_BASE_URL_COMPOSE:   https://api.${DOMAIN}/compose
+      CORREDOR_API_BASE_URL_MESSAGING: https://api.${DOMAIN}/messaging
+      CORREDOR_API_BASE_URL_SYSTEM:    https://api.${DOMAIN}/system
+    # Uncomment to use local fs for data persistence
+    # volumes: [ "./data/server:/data" ]
 
   corredor:
     image: cortezaproject/corteza-server-corredor:${VERSION}
+    networks: [ internal ]
     restart: on-failure
     env_file: [ .env ]
-    environment:
-      # Informing Corredor where it he contact us
-      CORREDOR_ADDR:                   "corredor:${LOCAL_DEMO_CRD_PORT}"
-    # Binds internal port to port LOCAL_DEMO_CRD_PORT on localhost
-    ports: [ "${SERVER_IP}:${LOCAL_DEMO_CRD_PORT}:50051" ]
 
   webapp:
     image: cortezaproject/corteza-webapp:${VERSION}
     restart: on-failure
     depends_on: [ server ]
+    networks: [ proxy ]
     environment:
-      # Monolith server in the backend, all services can be found under one base URL
-      MONOLITH_API: 1
-      # Configure web application with API location
-      API_BASEURL:  "${SERVER_IP}:${LOCAL_DEMO_API_PORT}"
-    # Binds internal port 80 to port LOCAL_DEMO_SPA_PORT on localhost
-    ports: [ "${SERVER_IP}:${LOCAL_DEMO_SPA_PORT}:80" ]
+      MONOLITH_API:     "true"
+      VIRTUAL_HOST:     ${DOMAIN}
+      LETSENCRYPT_HOST: ${DOMAIN}
+
+  nginx-proxy:
+    image: jwilder/nginx-proxy
+    container_name: nginx-proxy
+    restart: always
+    networks:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    labels:
+      - "com.github.jrcs.letsencrypt_nginx_proxy_companion.nginx_proxy"
+    volumes:
+      - ./certs:/etc/nginx/certs
+      - ./htpasswd:/etc/nginx/htpasswd
+      - ./vhost.d:/etc/nginx/vhost.d
+      - ./html:/usr/share/nginx/html
+      - ./custom.conf:/etc/nginx/conf.d/custom.conf:ro
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+
+  nginx-letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion
+    container_name: nginx-letsencrypt
+    restart: always
+    depends_on:
+      - nginx-proxy
+    volumes:
+      - ./certs:/etc/nginx/certs
+      - ./vhost.d:/etc/nginx/vhost.d
+      - ./html:/usr/share/nginx/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+
+networks:
+  internal: {}
+  { proxy: { name: proxy } }
+  proxy: { external: true }
